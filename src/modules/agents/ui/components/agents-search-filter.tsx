@@ -10,8 +10,10 @@ export const AgentsSearchFilter = () => {
     return (
         <div className="relative">
             <Input
+                aria-label="Search agents by name"
                 placeholder="Filter by name"
                 className="h-9 bg-white w-50 pl-7"
+                value={filters.search}
                 value={filters.search}
                 onChange={(e) => setFilters({ search: e.target.value })}
             />
