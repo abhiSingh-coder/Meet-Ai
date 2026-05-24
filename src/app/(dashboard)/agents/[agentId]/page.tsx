@@ -14,7 +14,7 @@ const Page = async ({ params }: Props) => {
 
     const { agentId } = await params
     const queryClient = getQueryClient()
-    void queryClient.prefetchQuery(
+    await queryClient.prefetchQuery(
         trpc.agents.getOne.queryOptions({ id: agentId })
     )
 
