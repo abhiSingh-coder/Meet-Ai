@@ -10,7 +10,7 @@ import { redirect } from "next/navigation"
 import { Suspense } from "react"
 import { ErrorBoundary } from "react-error-boundary"
 import type { SearchParams } from "nuqs/server"
-import { loadSearchParams } from "@/modules/agents/params"
+import { loadSearchParams } from "@/modules/meetings/params"
 
 interface Props {
     searchParams: Promise<SearchParams>
