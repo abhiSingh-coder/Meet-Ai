@@ -9,10 +9,9 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 
 import { NewAgentDialog } from "./new-agent-dialog";
-import { useAgentsFilters } from "@/app/(dashboard)/agents/hooks/use-agents-filters";
+import { useAgentsFilters } from "@/modules/agents/hooks/use-agents-filters";
 import { AgentsSearchFilter } from "./agents-search-filter";
 import { DEFAULT_PAGE } from "@/constants";
-// import { AgentsSearchFilter } from "./agents-search-filter";
 
 export const AgentsListHeader = () => {
     const [filters, setFilters] = useAgentsFilters();
