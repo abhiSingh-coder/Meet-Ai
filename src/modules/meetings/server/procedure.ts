@@ -128,6 +128,18 @@ export const meetingsRouter = createTRPCRouter({
                 userId: auth.user.id
             }).returning()
 
+            const [existingAgent] = await db
+                .select()
+                .from(agents)
+                .where(eq(agents.id, createdMeeting.agentId));
+
+            if (!existingAgent) {
+                throw new TRPCError({
+                    code: "NOT_FOUND",
+                    message: "Agent not found",
+                });
+            }
+
             const call = streamVideo.video.call("default", createdMeeting.id);
             await call.create({
                 data: {
@@ -149,18 +161,6 @@ export const meetingsRouter = createTRPCRouter({
                     },
                 },
             });
-
-            const [existingAgent] = await db
-                .select()
-                .from(agents)
-                .where(eq(agents.id, createdMeeting.agentId));
-
-            if (!existingAgent) {
-                throw new TRPCError({
-                    code: "NOT_FOUND",
-                    message: "Agent not found",
-                });
-            }
 
             await streamVideo.upsertUsers([
                 {
