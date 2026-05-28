@@ -25,7 +25,10 @@ importers:
         version: 1.0.0
       '@stream-io/node-sdk':
         specifier: ^0.7.59
-        version: 0.7.59
+        version: 0.7.59(@stream-io/openai-realtime-api@0.2.0)
+      '@stream-io/openai-realtime-api':
+        specifier: 0.2.0
+        version: 0.2.0
       '@stream-io/video-react-sdk':
         specifier: ^1.37.3
         version: 1.37.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
@@ -1274,6 +1277,10 @@ packages:
   '@open-draft/until@2.1.0':
     resolution: {integrity: sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg==}
 
+  '@openai/realtime-api-beta@https://codeload.github.com/openai/openai-realtime-api-beta/tar.gz/a5cb94824f625423858ebacb9f769226ca98945f':
+    resolution: {tarball: https://codeload.github.com/openai/openai-realtime-api-beta/tar.gz/a5cb94824f625423858ebacb9f769226ca98945f}
+    version: 0.0.0
+
   '@peculiar/asn1-android@2.6.0':
     resolution: {integrity: sha512-cBRCKtYPF7vJGN76/yG8VbxRcHLPF3HnkoHhKOZeHpoVtbMYfY9ROKtH3DtYUY9m8uI1Mh47PRhHf2hSK3xcSQ==}
 
@@ -2083,6 +2090,9 @@ packages:
     peerDependenciesMeta:
       '@stream-io/openai-realtime-api':
         optional: true
+
+  '@stream-io/openai-realtime-api@0.2.0':
+    resolution: {integrity: sha512-tn7lcqusiK7HZiYpE87e1PGJZdEvHeNTeyLqNsUI9n+97kDdZcfWQBmkZUMgCo72h6if4eLmhZ0X7cg95zMtMw==}
 
   '@stream-io/video-client@1.51.0':
     resolution: {integrity: sha512-ANqMJry0H/jalOvCV5EVe3hodSpFiff1eUfhx6rQJti4kOH9jKlN9XpP2RxEGnIgGGddVjJO88Q7Wt11rBpRuw==}
@@ -5092,6 +5102,18 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   wsl-utils@0.3.1:
     resolution: {integrity: sha512-g/eziiSUNBSsdDJtCLB8bdYEUMj4jR7AGeUo96p/3dTafgjHhpF4RiCFPiRILwjQoDXx5MqkBr4fwWtR3Ky4Wg==}
     engines: {node: '>=20'}
@@ -6072,6 +6094,13 @@ snapshots:
 
   '@open-draft/until@2.1.0': {}
 
+  '@openai/realtime-api-beta@https://codeload.github.com/openai/openai-realtime-api-beta/tar.gz/a5cb94824f625423858ebacb9f769226ca98945f':
+    dependencies:
+      ws: 8.21.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@peculiar/asn1-android@2.6.0':
     dependencies:
       '@peculiar/asn1-schema': 2.6.0
@@ -6983,12 +7012,22 @@ snapshots:
 
   '@stream-io/logger@2.0.0': {}
 
-  '@stream-io/node-sdk@0.7.59':
+  '@stream-io/node-sdk@0.7.59(@stream-io/openai-realtime-api@0.2.0)':
     dependencies:
       '@types/jsonwebtoken': 9.0.10
       '@types/node': 18.19.130
       jsonwebtoken: 9.0.3
       uuid: 13.0.2
+    optionalDependencies:
+      '@stream-io/openai-realtime-api': 0.2.0
+
+  '@stream-io/openai-realtime-api@0.2.0':
+    dependencies:
+      '@openai/realtime-api-beta': https://codeload.github.com/openai/openai-realtime-api-beta/tar.gz/a5cb94824f625423858ebacb9f769226ca98945f
+      ws: 8.21.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   '@stream-io/video-client@1.51.0':
     dependencies:
@@ -10254,6 +10293,8 @@ snapshots:
       strip-ansi: 6.0.1
 
   wrappy@1.0.2: {}
+
+  ws@8.21.0: {}
 
   wsl-utils@0.3.1:
     dependencies:
