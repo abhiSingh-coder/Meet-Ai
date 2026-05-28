@@ -1,12 +1,132 @@
+// import { db } from "@/db";
+// import { agents, meetings } from "@/db/schema";
+// import { streamVideo } from "@/lib/stream-video";
+// import { spawnAgent } from "@/lib/agent-server";
+// import { CallSessionParticipantLeftEvent, CallSessionStartedEvent } from "@stream-io/node-sdk";
+// import { and, eq, not } from "drizzle-orm";
+// import { NextRequest, NextResponse } from "next/server";
+
+// function verifySignatureWithSDK(body: string, signature: string) {
+//   return streamVideo.verifyWebhook(body, signature);
+// }
+
+// export async function POST(req: NextRequest) {
+//   const signature = req.headers.get("x-signature");
+//   const apiKey = req.headers.get("x-api-key");
+
+//   if (!signature || !apiKey) {
+//     return NextResponse.json({ error: "Missing signature or API key" }, { status: 400 });
+//   }
+
+//   const body = await req.text();
+
+//   if (!verifySignatureWithSDK(body, signature)) {
+//     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+//   }
+
+//   let payload: unknown;
+//   try {
+//     payload = JSON.parse(body);
+//   } catch {
+//     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+//   }
+
+//   const eventType = (payload as Record<string, unknown>)?.type;
+
+//   // ── call started ──────────────────────────────────────────────────────────
+//   if (eventType === "call.session_started") {
+//     const event = payload as CallSessionStartedEvent;
+//     const meetingId = event.call.custom?.meetingId;
+
+//     if (!meetingId) {
+//       return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+//     }
+
+//     const [existingMeeting] = await db
+//       .select()
+//       .from(meetings)
+//       .where(
+//         and(
+//           eq(meetings.id, meetingId),
+//           not(eq(meetings.status, "completed")),
+//           not(eq(meetings.status, "active")),
+//           not(eq(meetings.status, "cancelled")),
+//           not(eq(meetings.status, "processing")),
+//         )
+//       );
+
+//     if (!existingMeeting) {
+//       return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
+//     }
+
+//     // mark meeting active
+//     await db
+//       .update(meetings)
+//       .set({ status: "active", startedAt: new Date() })
+//       .where(eq(meetings.id, existingMeeting.id));
+
+//     // fetch the agent using agentId already on the meeting row
+//     const [existingAgent] = await db
+//       .select()
+//       .from(agents)
+//       .where(eq(agents.id, existingMeeting.agentId)); // ✅ already in schema
+
+//     if (!existingAgent) {
+//       return NextResponse.json({ error: "Agent not found" }, { status: 404 });
+//     }
+
+//     // spawn Gemini agent — no OpenAI key needed
+//     await spawnAgent(meetingId, existingAgent.instructions);
+//   }
+
+//   // ── participant left ───────────────────────────────────────────────────────
+//   else if (eventType === "call.session_participant_left") {
+//     const event = payload as CallSessionParticipantLeftEvent;
+//     const meetingId = event.call_cid.split(":")[1];
+
+//     if (!meetingId) {
+//       return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+//     }
+
+//     // end the Stream call — agent disconnects on its own via idle timeout
+//     const call = streamVideo.video.call("default", meetingId);
+//     await call.end();
+
+//     // mark meeting completed
+//     await db
+//       .update(meetings)
+//       .set({ status: "completed", endedAt: new Date() })
+//       .where(eq(meetings.id, meetingId));
+//   }
+
+//   return NextResponse.json({ status: "ok" });
+// }
+
+import { and, eq, not } from "drizzle-orm";
+import { NextRequest, NextResponse } from "next/server";
+import {
+  MessageNewEvent,
+  CallEndedEvent,
+  CallTranscriptionReadyEvent,
+  CallRecordingReadyEvent,
+  CallSessionParticipantLeftEvent,
+  CallSessionStartedEvent,
+} from "@stream-io/node-sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 import { db } from "@/db";
 import { agents, meetings } from "@/db/schema";
 import { streamVideo } from "@/lib/stream-video";
 import { spawnAgent } from "@/lib/agent-server";
-import { CallSessionParticipantLeftEvent, CallSessionStartedEvent } from "@stream-io/node-sdk";
-import { and, eq, not } from "drizzle-orm";
-import { NextRequest, NextResponse } from "next/server";
+import { inngest } from "@/inngest/client";
+import { generateAvatarUri } from "@/lib/avatar";
+// import { streamChat } from "@/lib/stream-chat";
 
-function verifySignatureWithSDK(body: string, signature: string) {
+// ── Gemini for post-meeting chat ───────────────────────────────────────────────
+const geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+// ── Webhook signature verification ────────────────────────────────────────────
+function verifySignatureWithSDK(body: string, signature: string): boolean {
   return streamVideo.verifyWebhook(body, signature);
 }
 
@@ -15,7 +135,10 @@ export async function POST(req: NextRequest) {
   const apiKey = req.headers.get("x-api-key");
 
   if (!signature || !apiKey) {
-    return NextResponse.json({ error: "Missing signature or API key" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing signature or API key" },
+      { status: 400 }
+    );
   }
 
   const body = await req.text();
@@ -33,7 +156,7 @@ export async function POST(req: NextRequest) {
 
   const eventType = (payload as Record<string, unknown>)?.type;
 
-  // ── call started ──────────────────────────────────────────────────────────
+  // ── call.session_started → mark active + spawn Gemini live agent ──────────
   if (eventType === "call.session_started") {
     const event = payload as CallSessionStartedEvent;
     const meetingId = event.call.custom?.meetingId;
@@ -59,46 +182,186 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
     }
 
-    // mark meeting active
     await db
       .update(meetings)
       .set({ status: "active", startedAt: new Date() })
       .where(eq(meetings.id, existingMeeting.id));
 
-    // fetch the agent using agentId already on the meeting row
     const [existingAgent] = await db
       .select()
       .from(agents)
-      .where(eq(agents.id, existingMeeting.agentId)); // ✅ already in schema
+      .where(eq(agents.id, existingMeeting.agentId));
 
     if (!existingAgent) {
       return NextResponse.json({ error: "Agent not found" }, { status: 404 });
     }
 
-    // spawn Gemini agent — no OpenAI key needed
+    // spawn Gemini live agent via Python server
     await spawnAgent(meetingId, existingAgent.instructions);
-  }
 
-  // ── participant left ───────────────────────────────────────────────────────
-  else if (eventType === "call.session_participant_left") {
+    // ── call.session_participant_left → end call ─────────────
+  } else if (eventType === "call.session_participant_left") {
     const event = payload as CallSessionParticipantLeftEvent;
-    const meetingId = event.call_cid.split(":")[1];
+    const meetingId = event.call_cid.split(":")[1]; // call_cid is formatted as "type:id"
 
     if (!meetingId) {
       return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
     }
 
-    // end the Stream call — agent disconnects on its own via idle timeout
     const call = streamVideo.video.call("default", meetingId);
     await call.end();
 
-    // mark meeting completed
+    // ── call.session_ended → mark processing ──────────────────────────────────
+  } else if (eventType === "call.session_ended") {
+    const event = payload as CallEndedEvent;
+    const meetingId = event.call.custom?.meetingId;
+
+    if (!meetingId) {
+      return NextResponse.json({ error: "Missing meetingId" }, { status: 400 });
+    }
+
     await db
       .update(meetings)
-      .set({ status: "completed", endedAt: new Date() })
+      .set({ status: "processing", endedAt: new Date() })
+      .where(and(eq(meetings.id, meetingId), eq(meetings.status, "active")));
+
+    // ── call.transcription_ready → save URL + trigger inngest ─────────────────
+  } else if (eventType === "call.transcription_ready") {
+    const event = payload as CallTranscriptionReadyEvent;
+    const meetingId = event.call_cid.split(":")[1];
+
+    const [updatedMeeting] = await db
+      .update(meetings)
+      .set({ transcriptUrl: event.call_transcription.url })
+      .where(eq(meetings.id, meetingId))
+      .returning();
+
+    if (!updatedMeeting) {
+      return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
+    }
+
+    await inngest.send({
+      name: "meetings/processing",
+      data: {
+        meetingId: updatedMeeting.id,
+        transcriptUrl: updatedMeeting.transcriptUrl,
+      },
+    });
+
+    // ── call.recording_ready → save recording URL ─────────────────────────────
+  } else if (eventType === "call.recording_ready") {
+    const event = payload as CallRecordingReadyEvent;
+    const meetingId = event.call_cid.split(":")[1];
+
+    await db
+      .update(meetings)
+      .set({ recordingUrl: event.call_recording.url })
       .where(eq(meetings.id, meetingId));
   }
+  // ── message.new → Gemini post-meeting chat reply ───────────────────────────
+  //   } else if (eventType === "message.new") {
+  //     const event = payload as MessageNewEvent;
+
+  //     const userId = event.user?.id;
+  //     const channelId = event.channel_id;
+  //     const text = event.message?.text;
+
+  //     if (!userId || !channelId || !text) {
+  //       return NextResponse.json(
+  //         { error: "Missing required fields" },
+  //         { status: 400 }
+  //       );
+  //     }
+
+  //     const [existingMeeting] = await db
+  //       .select()
+  //       .from(meetings)
+  //       .where(and(eq(meetings.id, channelId), eq(meetings.status, "completed")));
+
+  //     if (!existingMeeting) {
+  //       return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
+  //     }
+
+  //     const [existingAgent] = await db
+  //       .select()
+  //       .from(agents)
+  //       .where(eq(agents.id, existingMeeting.agentId));
+
+  //     if (!existingAgent) {
+  //       return NextResponse.json({ error: "Agent not found" }, { status: 404 });
+  //     }
+
+  //     // only reply to human messages, not the agent's own messages
+  //     if (userId !== existingAgent.id) {
+  //       const systemInstruction = `
+  // You are an AI assistant helping the user revisit a recently completed meeting.
+  // Below is a summary of the meeting, generated from the transcript:
+
+  // ${existingMeeting.summary}
+
+  // The following are your original instructions from the live meeting assistant. Please continue to follow these behavioral guidelines as you assist the user:
+
+  // ${existingAgent.instructions}
+
+  // The user may ask questions about the meeting, request clarifications, or ask for follow-up actions.
+  // Always base your responses on the meeting summary above.
+
+  // You also have access to the recent conversation history between you and the user. Use the context of previous messages to provide relevant, coherent, and helpful responses. If the user's question refers to something discussed earlier, make sure to take that into account and maintain continuity in the conversation.
+
+  // If the summary does not contain enough information to answer a question, politely let the user know.
+
+  // Be concise, helpful, and focus on providing accurate information from the meeting and the ongoing conversation.
+  //       `.trim();
+
+  //       const channel = streamChat.channel("messaging", channelId);
+  //       await channel.watch();
+
+  //       // build Gemini chat history from last 5 messages
+  //       const history = channel.state.messages
+  //         .slice(-5)
+  //         .filter((msg) => msg.text && msg.text.trim() !== "")
+  //         .map((message) => ({
+  //           role: message.user?.id === existingAgent.id ? "model" : "user",
+  //           parts: [{ text: message.text ?? "" }],
+  //         }));
+
+  //       const model = geminiClient.getGenerativeModel({
+  //         model: "gemini-1.5-flash",
+  //         systemInstruction,
+  //       });
+
+  //       const chat = model.startChat({ history });
+  //       const result = await chat.sendMessage(text);
+  //       const geminiResponseText = result.response.text();
+
+  //       if (!geminiResponseText) {
+  //         return NextResponse.json(
+  //           { error: "No response from Gemini" },
+  //           { status: 400 }
+  //         );
+  //       }
+
+  //       const avatarUrl = generateAvatarUri({
+  //         seed: existingAgent.name,
+  //         variant: "botttsNeutral",
+  //       });
+
+  //       await streamChat.upsertUser({
+  //         id: existingAgent.id,
+  //         name: existingAgent.name,
+  //         image: avatarUrl,
+  //       });
+
+  //       await channel.sendMessage({
+  //         text: geminiResponseText,
+  //         user: {
+  //           id: existingAgent.id,
+  //           name: existingAgent.name,
+  //           image: avatarUrl,
+  //         },
+  //       });
+  //     }
+
 
   return NextResponse.json({ status: "ok" });
 }
-
