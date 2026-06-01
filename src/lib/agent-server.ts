@@ -2,14 +2,19 @@ const AGENT_SERVER = process.env.VISION_AGENT_SERVER_URL ?? "http://localhost:80
 
 export async function spawnAgent(
     callId: string,
-    instructions: string
+    instructions: string,
+    agentId: string,   
+    agentName: string,    
 ): Promise<{ session_id: string } | null> {
+    console.log("🔵 spawning agent with instructions:", instructions);
     const res = await fetch(`${AGENT_SERVER}/calls/${callId}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             call_type: "default",
             instructions,         // passed as kwargs into create_agent()
+            agentId,
+            agentName
         }),
     });
 
