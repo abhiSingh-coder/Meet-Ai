@@ -82,7 +82,7 @@ export const ChatUI = ({
         };
     }, [client, meetingId, userId]);
     
-    if (!client) {
+    if (!client || !channel) {
         return (
             <LoadingState
                 title="Loading Chat"
