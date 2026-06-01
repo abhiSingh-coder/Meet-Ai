@@ -112,7 +112,6 @@ import {
   CallSessionParticipantLeftEvent,
   CallSessionStartedEvent,
 } from "@stream-io/node-sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 import { db } from "@/db";
 import { agents, meetings } from "@/db/schema";
@@ -120,10 +119,11 @@ import { streamVideo } from "@/lib/stream-video";
 import { spawnAgent } from "@/lib/agent-server";
 import { inngest } from "@/inngest/client";
 import { generateAvatarUri } from "@/lib/avatar";
-// import { streamChat } from "@/lib/stream-chat";
+import { streamChat } from "@/lib/stream-chat";
+import { GoogleGenAI } from "@google/genai";
 
 // ── Gemini for post-meeting chat ───────────────────────────────────────────────
-const geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const geminiClient = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY! });
 
 // ── Webhook signature verification ────────────────────────────────────────────
 function verifySignatureWithSDK(body: string, signature: string): boolean {
@@ -195,9 +195,27 @@ export async function POST(req: NextRequest) {
     if (!existingAgent) {
       return NextResponse.json({ error: "Agent not found" }, { status: 404 });
     }
+    // ✅ Generate avatar and upsert agent in Stream Video before spawning
+    const avatarUrl = generateAvatarUri({
+      seed: existingAgent.name,
+      variant: "botttsNeutral",
+    });
 
+    await streamVideo.upsertUsers([
+      {
+        id: existingAgent.id,
+        name: existingAgent.name,
+        image: avatarUrl,
+        role: "user",
+      },
+    ]);
     // spawn Gemini live agent via Python server
-    await spawnAgent(meetingId, existingAgent.instructions);
+    await spawnAgent(
+      meetingId,
+      existingAgent.instructions,
+      existingAgent.id,
+      existingAgent.name,
+    );
 
     // ── call.session_participant_left → end call ─────────────
   } else if (eventType === "call.session_participant_left") {
@@ -257,111 +275,120 @@ export async function POST(req: NextRequest) {
       .update(meetings)
       .set({ recordingUrl: event.call_recording.url })
       .where(eq(meetings.id, meetingId));
+
+    // ── message.new → Gemini post-meeting chat reply ───────────────────────────
+  } else if (eventType === "message.new") {
+    const event = payload as MessageNewEvent;
+
+    const userId = event.user?.id;
+    const channelId = event.channel_id;
+    const text = event.message?.text;
+
+    console.log("🔵 message.new received", { userId, channelId, text });
+
+    if (!userId || !channelId || !text) {
+      console.log("❌ Missing fields", { userId, channelId, text });
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    const [existingMeeting] = await db
+      .select()
+      .from(meetings)
+      .where(and(eq(meetings.id, channelId), eq(meetings.status, "completed")));
+
+    console.log("🔵 existingMeeting", existingMeeting ?? "NOT FOUND");
+
+    if (!existingMeeting) {
+      return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
+    }
+
+    const [existingAgent] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, existingMeeting.agentId));
+
+    console.log("🔵 existingAgent", existingAgent ?? "NOT FOUND");
+    console.log("🔵 guard check — userId:", userId, "agentId:", existingAgent?.id, "will reply:", userId !== existingAgent?.id);
+
+    if (!existingAgent) {
+      return NextResponse.json({ error: "Agent not found" }, { status: 404 });
+    }
+
+    if (userId !== existingAgent.id) {
+
+      const systemInstruction = `
+You are an AI assistant helping the user revisit a recently completed meeting.
+Below is a summary of the meeting, generated from the transcript:
+
+${existingMeeting.summary}
+
+The following are your original instructions from the live meeting assistant. Please continue to follow these behavioral guidelines as you assist the user:
+
+${existingAgent.instructions}
+
+The user may ask questions about the meeting, request clarifications, or ask for follow-up actions.
+Always base your responses on the meeting summary above.
+
+You also have access to the recent conversation history between you and the user. Use the context of previous messages to provide relevant, coherent, and helpful responses.
+
+If the summary does not contain enough information to answer a question, politely let the user know.
+
+Be concise, helpful, and focus on providing accurate information from the meeting and the ongoing conversation.
+        `.trim();
+
+      const channel = streamChat.channel("messaging", channelId);
+      await channel.watch();
+
+      console.log("🔵 fetched messages count:", channel.state.messages.length);
+
+      const history = channel.state.messages
+        .slice(-5)
+        .filter((msg) => msg.text && msg.text.trim() !== "")
+        .map((message) => ({
+          role: message.user?.id === existingAgent.id ? "model" : "user",
+          parts: [{ text: message.text ?? "" }],
+        }));
+
+      console.log("🔵 history built:", JSON.stringify(history, null, 2));
+
+      const chat = geminiClient.chats.create({
+        model: "gemini-2.5-flash",
+        config: { systemInstruction },
+        history,
+      });
+
+      console.log("🔵 sending to Gemini:", text);
+
+      const result = await chat.sendMessage({ message: text });
+      const geminiResponseText = result.text;
+
+      console.log("🔵 Gemini response:", geminiResponseText ?? "EMPTY");
+
+      if (!geminiResponseText) {
+        return NextResponse.json({ error: "No response from Gemini" }, { status: 400 });
+      }
+
+      const avatarUrl = generateAvatarUri({
+        seed: existingAgent.name,
+        variant: "botttsNeutral",
+      });
+
+      await streamChat.upsertUser({
+        id: existingAgent.id,
+        name: existingAgent.name,
+        image: avatarUrl,
+      });
+
+      await channel.sendMessage({
+        text: geminiResponseText,
+        user_id: existingAgent.id,
+      });
+
+      console.log("✅ Agent reply sent");
+    } else {
+      console.log("⏭️ Skipping — message is from agent itself");
+    }
   }
-  // ── message.new → Gemini post-meeting chat reply ───────────────────────────
-  //   } else if (eventType === "message.new") {
-  //     const event = payload as MessageNewEvent;
-
-  //     const userId = event.user?.id;
-  //     const channelId = event.channel_id;
-  //     const text = event.message?.text;
-
-  //     if (!userId || !channelId || !text) {
-  //       return NextResponse.json(
-  //         { error: "Missing required fields" },
-  //         { status: 400 }
-  //       );
-  //     }
-
-  //     const [existingMeeting] = await db
-  //       .select()
-  //       .from(meetings)
-  //       .where(and(eq(meetings.id, channelId), eq(meetings.status, "completed")));
-
-  //     if (!existingMeeting) {
-  //       return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
-  //     }
-
-  //     const [existingAgent] = await db
-  //       .select()
-  //       .from(agents)
-  //       .where(eq(agents.id, existingMeeting.agentId));
-
-  //     if (!existingAgent) {
-  //       return NextResponse.json({ error: "Agent not found" }, { status: 404 });
-  //     }
-
-  //     // only reply to human messages, not the agent's own messages
-  //     if (userId !== existingAgent.id) {
-  //       const systemInstruction = `
-  // You are an AI assistant helping the user revisit a recently completed meeting.
-  // Below is a summary of the meeting, generated from the transcript:
-
-  // ${existingMeeting.summary}
-
-  // The following are your original instructions from the live meeting assistant. Please continue to follow these behavioral guidelines as you assist the user:
-
-  // ${existingAgent.instructions}
-
-  // The user may ask questions about the meeting, request clarifications, or ask for follow-up actions.
-  // Always base your responses on the meeting summary above.
-
-  // You also have access to the recent conversation history between you and the user. Use the context of previous messages to provide relevant, coherent, and helpful responses. If the user's question refers to something discussed earlier, make sure to take that into account and maintain continuity in the conversation.
-
-  // If the summary does not contain enough information to answer a question, politely let the user know.
-
-  // Be concise, helpful, and focus on providing accurate information from the meeting and the ongoing conversation.
-  //       `.trim();
-
-  //       const channel = streamChat.channel("messaging", channelId);
-  //       await channel.watch();
-
-  //       // build Gemini chat history from last 5 messages
-  //       const history = channel.state.messages
-  //         .slice(-5)
-  //         .filter((msg) => msg.text && msg.text.trim() !== "")
-  //         .map((message) => ({
-  //           role: message.user?.id === existingAgent.id ? "model" : "user",
-  //           parts: [{ text: message.text ?? "" }],
-  //         }));
-
-  //       const model = geminiClient.getGenerativeModel({
-  //         model: "gemini-1.5-flash",
-  //         systemInstruction,
-  //       });
-
-  //       const chat = model.startChat({ history });
-  //       const result = await chat.sendMessage(text);
-  //       const geminiResponseText = result.response.text();
-
-  //       if (!geminiResponseText) {
-  //         return NextResponse.json(
-  //           { error: "No response from Gemini" },
-  //           { status: 400 }
-  //         );
-  //       }
-
-  //       const avatarUrl = generateAvatarUri({
-  //         seed: existingAgent.name,
-  //         variant: "botttsNeutral",
-  //       });
-
-  //       await streamChat.upsertUser({
-  //         id: existingAgent.id,
-  //         name: existingAgent.name,
-  //         image: avatarUrl,
-  //       });
-
-  //       await channel.sendMessage({
-  //         text: geminiResponseText,
-  //         user: {
-  //           id: existingAgent.id,
-  //           name: existingAgent.name,
-  //           image: avatarUrl,
-  //         },
-  //       });
-  //     }
-
-
   return NextResponse.json({ status: "ok" });
 }
+
