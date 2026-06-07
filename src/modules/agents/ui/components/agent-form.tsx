@@ -31,15 +31,18 @@ export const AgentForm = ({ onCancel, onSuccess, initialVlaues }: AgentFormProps
                 trpc.agents.getMany.queryOptions({})
             )
 
-            if (initialVlaues?.id) {
-                await queryClient.invalidateQueries(
-                    trpc.agents.getOne.queryOptions({ id: initialVlaues.id })
-                )
-            }
+            await queryClient.invalidateQueries(
+                trpc.premium.getFreeUsage.queryOptions(),
+            );
+
             onSuccess?.()
         },
         onError: (error) => {
             toast.error(error.message)
+
+            if (error.data?.code === "FORBIDDEN") {
+                router.push("/upgrade");
+            }
         }
     }))
 
