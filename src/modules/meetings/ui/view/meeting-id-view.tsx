@@ -37,8 +37,9 @@ export const MeetingIdView = ({ meetingId }: Props) => {
             onSuccess: async () => {
                 await queryClient.invalidateQueries(trpc.meetings.getMany.queryOptions({}));
                 await queryClient.invalidateQueries(
-                    // trpc.premium.getFreeUsage.queryOptions(),
+                    trpc.premium.getFreeUsage.queryOptions(),
                 );
+
                 router.push("/meetings");
             },
         }),
@@ -73,7 +74,7 @@ export const MeetingIdView = ({ meetingId }: Props) => {
                     meetingName={data.name}
                     onEdit={() => { setUpdateMeetingDialogOpen(true) }}
                     onRemove={handleRemoveMeeting} />
-                
+
                 {isCancelled && <CancelledState />}
                 {isProcessing && <ProcessingState />}
                 {isCompleted && <CompletedState data={data} />}
@@ -87,4 +88,3 @@ export const MeetingIdView = ({ meetingId }: Props) => {
         </>
     );
 };
-          

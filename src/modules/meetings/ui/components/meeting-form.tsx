@@ -41,15 +41,18 @@ export const MeetingForm = ({ onCancel, onSuccess, initialVlaues }: MeetingFormP
                 trpc.meetings.getMany.queryOptions({})
             )
 
-            if (initialVlaues?.id) {
-                await queryClient.invalidateQueries(
-                    trpc.agents.getOne.queryOptions({ id: initialVlaues.id })
-                )
-            }
+            await queryClient.invalidateQueries(
+                trpc.premium.getFreeUsage.queryOptions(),
+            );
+
             onSuccess?.(data.id)
         },
         onError: (error) => {
             toast.error(error.message)
+
+            if (error.data?.code === "FORBIDDEN") {
+                router.push("/upgrade");
+            }
         }
     }))
 
